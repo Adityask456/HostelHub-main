@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "c2c6eaee-90f1-4829-9699-78ed6e8818de"
+      }
+    },
+    "android": {
+      "package": "com.aditya1845.hosteltracking"
+    }
+  }
+}

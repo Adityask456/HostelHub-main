@@ -1,0 +1,20 @@
+{
+  "name": "hostelhub",
+  "version": "1.0.0",
+  "description": "Hostel management system",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "nodemon backend/server.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.38.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.1.0"
+  },
+  "devDependencies": {
+    "expo-module-scripts": "^5.0.8",
+    "nodemon": "^3.0.2"
+  }
+}
