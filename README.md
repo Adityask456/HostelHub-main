@@ -3,3 +3,12 @@ We have shared the Android-based application via a Google Drive link, as we have
 
 
 Similarly, the complete presentation video has been uploaded to YouTube and is available at the link mentioned above. Since Unstop requires a video file to be uploaded compulsorily, we submitted a placeholder (dummy) video on the platform. However, the full and final presentation video can be viewed on YouTube by clicking the provided link::https://youtu.be/0RJyAgWBIIY?si=Pvw1j55C6PtA2K6i 
+
+
+To login to an app you need the warden account it is :
+email: warden@hostel.com 
+password:123456
+for admin account 
+email: aditya@gmail.com 
+password:123456
+For student you can create your own 
