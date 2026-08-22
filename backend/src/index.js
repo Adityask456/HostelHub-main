@@ -30,6 +30,16 @@ app.use(cors({
 
 app.use(express.json());
 
+// Ensure MongoDB is connected before handling serverless requests
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ROUTES
 app.use("/api/auth", authRoutes);
 app.use("/api/users", usersRoutes);
