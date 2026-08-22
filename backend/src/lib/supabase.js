@@ -1,11 +1,2 @@
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-// Client for user operations (use anon key)
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-// Admin client for server operations (use service role key)
-export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey);
+// Supabase has been replaced with MongoDB and Mongoose.
+// Database connection is managed in src/config/db.js

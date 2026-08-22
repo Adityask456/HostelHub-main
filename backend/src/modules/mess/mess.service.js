@@ -1,14 +1,10 @@
-import { supabaseAdmin } from "../../config/db.js";
+import { MessMenu } from "../../models/MessMenu.js";
+import { MessFeedback } from "../../models/MessFeedback.js";
+import mongoose from "mongoose";
 
 export const createMenu = async ({ day, breakfast, lunch, dinner }) => {
-  const { data: menu, error } = await supabaseAdmin
-    .from("messmenu")
-    .insert({ day, breakfast, lunch, dinner, createdat: new Date() })
-    .select("*")
-    .single();
-
-  if (error) throw error;
-  return menu;
+  const menu = await MessMenu.create({ day, breakfast, lunch, dinner });
+  return menu.toJSON();
 };
 
 export const updateMenu = async ({ id, day, breakfast, lunch, dinner }) => {
@@ -18,105 +14,71 @@ export const updateMenu = async ({ id, day, breakfast, lunch, dinner }) => {
   if (lunch) data.lunch = lunch;
   if (dinner) data.dinner = dinner;
 
-  if (Object.keys(data).length === 0) {
-    const { data: menu, error } = await supabaseAdmin
-      .from("messmenu")
-      .select("*")
-      .eq("id", Number(id))
-      .single();
-    if (error) throw error;
-    return menu;
+  const menu = await MessMenu.findByIdAndUpdate(id, data, { new: true });
+  if (!menu) {
+    const e = new Error("Menu not found");
+    e.status = 404;
+    throw e;
   }
-
-  const { data: menu, error } = await supabaseAdmin
-    .from("messmenu")
-    .update(data)
-    .eq("id", Number(id))
-    .select("*")
-    .single();
-
-  if (error) throw error;
-  return menu;
+  return menu.toJSON();
 };
 
 export const deleteMenu = async ({ id }) => {
-  // First delete all feedback for this menu to avoid foreign key constraint
-  const { error: feedbackError } = await supabaseAdmin
-    .from("messfeedback")
-    .delete()
-    .eq("menuid", Number(id));
-
-  if (feedbackError) throw feedbackError;
-
-  // Then delete the menu
-  const { data: deleted, error } = await supabaseAdmin
-    .from("messmenu")
-    .delete()
-    .eq("id", Number(id))
-    .select("*")
-    .single();
-
-  if (error) throw error;
-  return deleted;
+  await MessFeedback.deleteMany({ menuId: id });
+  const deleted = await MessMenu.findByIdAndDelete(id);
+  if (!deleted) {
+    const e = new Error("Menu not found");
+    e.status = 404;
+    throw e;
+  }
+  return deleted.toJSON();
 };
 
 export const listMenus = async ({ day, page = 1, limit = 50 }) => {
-  let query = supabaseAdmin
-    .from("messmenu")
-    .select("*", { count: "exact" });
+  const query = {};
+  if (day) query.day = day;
 
-  if (day) {
-    query = query.eq("day", day);
-  }
+  const skip = (page - 1) * limit;
+  const [items, total] = await Promise.all([
+    MessMenu.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit),
+    MessMenu.countDocuments(query),
+  ]);
 
-  const { data: items, count, error } = await query
-    .order("createdat", { ascending: false })
-    .range((page - 1) * limit, page * limit - 1);
-
-  if (error) throw error;
-  return { items: items || [], total: count || 0, page, limit };
+  return { items: items.map((i) => i.toJSON()), total, page, limit };
 };
 
 export const createFeedback = async ({ userId, menuId, rating }) => {
-  const { data: feedback, error } = await supabaseAdmin
-    .from("messfeedback")
-    .insert({ userid: Number(userId), menuid: Number(menuId), rating: Number(rating), createdat: new Date() })
-    .select("*")
-    .single();
-
-  if (error) throw error;
-  return feedback;
+  const feedback = await MessFeedback.create({
+    userId,
+    menuId,
+    rating: Number(rating),
+  });
+  return feedback.toJSON();
 };
 
 export const analytics = async ({ from, to }) => {
-  let query = supabaseAdmin.from("messfeedback").select("menuid,rating");
-
-  if (from) {
-    query = query.gte("createdat", new Date(from).toISOString());
-  }
-  if (to) {
-    query = query.lte("createdat", new Date(to).toISOString());
+  const match = {};
+  if (from || to) {
+    match.createdAt = {};
+    if (from) match.createdAt.$gte = new Date(from);
+    if (to) match.createdAt.$lte = new Date(to);
   }
 
-  const { data: feedbacks, error } = await query;
-  if (error) throw error;
+  const results = await MessFeedback.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: "$menuId",
+        count: { $sum: 1 },
+        sum: { $sum: "$rating" },
+      },
+    },
+  ]);
 
-  const grouped = {};
-  (feedbacks || []).forEach((fb) => {
-    if (!grouped[fb.menuid]) {
-      grouped[fb.menuid] = { count: 0, sum: 0 };
-    }
-    grouped[fb.menuid].count += 1;
-    grouped[fb.menuid].sum += fb.rating;
-  });
-
-  const results = Object.entries(grouped).map(([menuid, { count, sum }]) => ({
-    menuId: Number(menuid),
-    likes: Math.round((count + sum) / 2),
-    dislikes: Math.round((count - sum) / 2),
-    score: sum,
+  return results.map((r) => ({
+    menuId: r._id.toString(),
+    likes: Math.round((r.count + r.sum) / 2),
+    dislikes: Math.round((r.count - r.sum) / 2),
+    score: r.sum,
   }));
-
-  return results;
 };
-

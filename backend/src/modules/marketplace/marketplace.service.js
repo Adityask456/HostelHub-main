@@ -1,71 +1,81 @@
-import { supabaseAdmin } from "../../config/db.js";
+import { MarketplaceItem } from "../../models/MarketplaceItem.js";
 
 export const createItem = async ({ userId, title, description, price }) => {
-  const { data: item, error } = await supabaseAdmin
-    .from("marketplaceitem")
-    .insert({ userid: Number(userId), title, description, price: Number(price), status: "AVAILABLE", createdat: new Date() })
-    .select("id,userid,title,description,price,status,createdat")
-    .single();
-
-  if (error) throw error;
-  return item;
+  const item = await MarketplaceItem.create({
+    userId,
+    title,
+    description,
+    price: Number(price),
+    status: "AVAILABLE",
+  });
+  return item.toJSON();
 };
 
 export const listItems = async ({ search, minPrice, maxPrice, status, page = 1, limit = 20 }) => {
-  let query = supabaseAdmin.from("marketplaceitem").select("*", { count: "exact" });
+  const query = {};
 
   if (status) {
-    query = query.eq("status", status);
+    query.status = status;
   }
 
   if (search) {
-    query = query.or(`title.ilike.%${search}%,description.ilike.%${search}%`);
+    query.$or = [
+      { title: { $regex: search, $options: "i" } },
+      { description: { $regex: search, $options: "i" } },
+    ];
   }
 
-  if (minPrice !== undefined) {
-    query = query.gte("price", Number(minPrice));
-  }
-  if (maxPrice !== undefined) {
-    query = query.lte("price", Number(maxPrice));
+  if (minPrice !== undefined || maxPrice !== undefined) {
+    query.price = {};
+    if (minPrice !== undefined) query.price.$gte = Number(minPrice);
+    if (maxPrice !== undefined) query.price.$lte = Number(maxPrice);
   }
 
-  const { data: items, count, error } = await query
-    .order("createdat", { ascending: false })
-    .range((page - 1) * limit, page * limit - 1);
+  const skip = (page - 1) * limit;
+  const [items, total] = await Promise.all([
+    MarketplaceItem.find(query)
+      .populate("userId", "name roomNumber email")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    MarketplaceItem.countDocuments(query),
+  ]);
 
-  if (error) throw error;
-  
-  // Fetch user data for each item
-  const { data: users } = await supabaseAdmin.from("user").select("id,name,roomnumber,email");
-  const userMap = {};
-  (users || []).forEach((u) => {
-    userMap[u.id] = u;
+  const formatted = items.map((item) => {
+    const json = item.toJSON();
+    json.user = item.userId
+      ? {
+          name: item.userId.name,
+          roomnumber: item.userId.roomNumber,
+          roomNumber: item.userId.roomNumber,
+          email: item.userId.email,
+        }
+      : { name: "Unknown", roomnumber: null };
+    return json;
   });
-  
-  const itemsWithUser = (items || []).map((item) => ({
-    ...item,
-    user: userMap[item.userid] || { name: "Unknown", roomnumber: null }
-  }));
-  
-  return { items: itemsWithUser, total: count || 0, page, limit };
+
+  return { items: formatted, total, page, limit };
 };
 
 export const getItemById = async ({ id }) => {
-  const { data: item, error } = await supabaseAdmin
-    .from("marketplaceitem")
-    .select("*")
-    .eq("id", Number(id))
-    .single();
+  const item = await MarketplaceItem.findById(id).populate("userId", "name roomNumber email");
+  if (!item) {
+    const e = new Error("Item not found");
+    e.status = 404;
+    throw e;
+  }
 
-  if (error) throw error;
-  
-  // Fetch user data
-  const { data: user } = await supabaseAdmin.from("user").select("id,name,roomnumber,email").eq("id", item.userid).single();
-  
-  return {
-    ...item,
-    user: user || { name: "Unknown", roomnumber: null }
-  };
+  const json = item.toJSON();
+  json.user = item.userId
+    ? {
+        name: item.userId.name,
+        roomnumber: item.userId.roomNumber,
+        roomNumber: item.userId.roomNumber,
+        email: item.userId.email,
+      }
+    : { name: "Unknown", roomnumber: null };
+
+  return json;
 };
 
 export const updateItem = async ({ id, title, description, price, status }) => {
@@ -75,37 +85,35 @@ export const updateItem = async ({ id, title, description, price, status }) => {
   if (price !== undefined) data.price = Number(price);
   if (status !== undefined) data.status = status;
 
-  const { data: item, error } = await supabaseAdmin
-    .from("marketplaceitem")
-    .update(data)
-    .eq("id", Number(id))
-    .select("*")
-    .single();
-
-  if (error) throw error;
-  return item;
+  const item = await MarketplaceItem.findByIdAndUpdate(id, data, { new: true });
+  if (!item) {
+    const e = new Error("Item not found");
+    e.status = 404;
+    throw e;
+  }
+  return item.toJSON();
 };
 
 export const deleteItem = async ({ id }) => {
-  const { data: deleted, error } = await supabaseAdmin
-    .from("marketplaceitem")
-    .delete()
-    .eq("id", Number(id))
-    .select("id")
-    .single();
-
-  if (error) throw error;
-  return deleted;
+  const deleted = await MarketplaceItem.findByIdAndDelete(id);
+  if (!deleted) {
+    const e = new Error("Item not found");
+    e.status = 404;
+    throw e;
+  }
+  return { success: true, id };
 };
 
 export const markSold = async ({ id }) => {
-  const { data: item, error } = await supabaseAdmin
-    .from("marketplaceitem")
-    .update({ status: "SOLD" })
-    .eq("id", Number(id))
-    .select("*")
-    .single();
-
-  if (error) throw error;
-  return item;
+  const item = await MarketplaceItem.findByIdAndUpdate(
+    id,
+    { status: "SOLD" },
+    { new: true }
+  );
+  if (!item) {
+    const e = new Error("Item not found");
+    e.status = 404;
+    throw e;
+  }
+  return item.toJSON();
 };

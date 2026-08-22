@@ -1,60 +1,55 @@
-import { supabaseAdmin } from "../../config/db.js";
+import { Notification } from "../../models/Notification.js";
+import { NotificationRead } from "../../models/NotificationRead.js";
 import { sendNotification } from "../../utils/notify.js";
 
 export const listMyNotifications = async ({ userId, unreadOnly, page = 1, limit = 20 }) => {
-  // Just get all notifications - the frontend will filter
-  const { data: allNotifications, count, error } = await supabaseAdmin
-    .from("notification")
-    .select("*")
-    .order("createdat", { ascending: false });
+  // Find notifications specific to this user OR global notices (userId is null)
+  const allNotifications = await Notification.find({
+    $or: [{ userId }, { userId: null }],
+  }).sort({ createdAt: -1 });
 
-  if (error) throw error;
+  // Get read status for global notices
+  const readRecords = await NotificationRead.find({ userId });
+  const readSet = new Set(readRecords.map((r) => r.notificationId.toString()));
 
-  // Simple filter: show if it's for this user OR if it's a broadcast (userid is null)
-  const filtered = (allNotifications || []).filter((n) => {
-    return n.userid === Number(userId) || n.userid === null;
-  });
+  const items = allNotifications.map((n) => {
+    const isGlobal = !n.userId;
+    const isRead = isGlobal ? readSet.has(n._id.toString()) : n.read;
 
-  // Process pagination
-  const items = filtered
-    .slice((page - 1) * limit, page * limit)
-    .map((n) => ({
-      id: n.id,
+    return {
+      id: n._id.toString(),
       title: n.title,
       message: n.message,
-      read: n.read || false,
-      createdAt: n.createdat,
-    }));
+      read: isRead || false,
+      createdAt: n.createdAt,
+    };
+  });
 
-  const finalItems = unreadOnly ? items.filter((i) => !i.read) : items;
+  const filtered = unreadOnly ? items.filter((i) => !i.read) : items;
+  const paginated = filtered.slice((page - 1) * limit, page * limit);
 
-  return { items: finalItems, total: filtered.length || 0, page, limit };
+  return { items: paginated, total: filtered.length, page, limit };
 };
 
 export const sendNotifications = async ({ recipients, title, message }) => {
-  // 1. Global/Role-based Notice
+  // 1. Global / Role-based Notice
   if (recipients?.role && ["ALL", "STUDENT", "WARDEN", "ADMIN"].includes(recipients.role)) {
     const targetRole = recipients.role === "ALL" ? null : recipients.role;
 
-    const { data: created, error } = await supabaseAdmin
-      .from("notification")
-      .insert({
-        targetrole: targetRole,
-        title,
-        message,
-        userid: null,
-        createdat: new Date(),
-      })
-      .select();
+    await Notification.create({
+      targetRole,
+      title,
+      message,
+      userId: null,
+    });
 
-    if (error) throw error;
     return { sentCount: 1, global: true };
   }
 
   // 2. Individual Notices
   const userIds = new Set();
   if (recipients?.userIds && Array.isArray(recipients.userIds)) {
-    recipients.userIds.forEach((id) => userIds.add(Number(id)));
+    recipients.userIds.forEach((id) => userIds.add(String(id)));
   }
 
   const ids = Array.from(userIds);
@@ -62,26 +57,19 @@ export const sendNotifications = async ({ recipients, title, message }) => {
 
   const records = await Promise.all(
     ids.map(async (uid) => {
-      const { data: notif, error } = await supabaseAdmin
-        .from("notification")
-        .insert({
-          userid: uid,
-          title,
-          message,
-          createdat: new Date(),
-        })
-        .select("*")
-        .single();
-
-      if (error) throw error;
+      const notif = await Notification.create({
+        userId: uid,
+        title,
+        message,
+      });
       return notif;
     })
   );
 
-  // Fire-and-forget push notifications (best-effort)
+  // Best-effort push notification
   for (const rec of records) {
-    if (rec.userid) {
-      sendNotification(rec.userid, { title: rec.title, message: rec.message }).catch(() => {});
+    if (rec.userId) {
+      sendNotification(rec.userId, { title: rec.title, message: rec.message }).catch(() => {});
     }
   }
 
@@ -89,44 +77,29 @@ export const sendNotifications = async ({ recipients, title, message }) => {
 };
 
 export const markRead = async ({ id, userId }) => {
-  const { data: notif, error: fetchError } = await supabaseAdmin
-    .from("notification")
-    .select("*")
-    .eq("id", Number(id))
-    .single();
-
-  if (fetchError || !notif) {
+  const notif = await Notification.findById(id);
+  if (!notif) {
     const e = new Error("Notification not found");
     e.status = 404;
     throw e;
   }
 
-  // If individual notice
-  if (notif.userid) {
-    if (notif.userid !== Number(userId)) {
+  if (notif.userId) {
+    if (String(notif.userId) !== String(userId)) {
       const e = new Error("Forbidden");
       e.status = 403;
       throw e;
     }
-    const { data: updated, error } = await supabaseAdmin
-      .from("notification")
-      .update({ read: true })
-      .eq("id", Number(id))
-      .select("*")
-      .single();
-
-    if (error) throw error;
-    return updated;
+    notif.read = true;
+    await notif.save();
+    return notif.toJSON();
   } else {
-    // Global notice: Create a read record if not exists
+    // Global notice
     try {
-      await supabaseAdmin.from("notificationread").insert({
-        userid: Number(userId),
-        notificationid: Number(id),
-      });
+      await NotificationRead.create({ userId, notificationId: id });
     } catch (e) {
-      // Ignore unique constraint violation (already read)
+      // Ignore if already marked read
     }
-    return { id: Number(id), read: true };
+    return { id, read: true };
   }
 };

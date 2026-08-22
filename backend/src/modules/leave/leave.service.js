@@ -1,165 +1,134 @@
-import { supabaseAdmin } from "../../config/db.js";
+import { Leave } from "../../models/Leave.js";
 
 export const apply = async ({ userId, from, to, reason }) => {
-  const { data: leave, error } = await supabaseAdmin
-    .from("leave")
-    .insert({
-      userid: Number(userId),
-      fromdate: from,
-      todate: to,
-      reason,
-      status: "PENDING",
-      createdat: new Date(),
-    })
-    .select("id,status,fromdate,todate,createdat")
-    .single();
-
-  if (error) throw error;
-  return leave;
+  const leave = await Leave.create({
+    userId,
+    fromDate: from,
+    toDate: to,
+    reason,
+    status: "PENDING",
+  });
+  return leave.toJSON();
 };
 
 export const listMyLeaves = async ({ userId, status, page = 1, limit = 20 }) => {
-  let query = supabaseAdmin
-    .from("leave")
-    .select("id,fromdate,todate,reason,status,createdat", { count: "exact" })
-    .eq("userid", Number(userId));
+  const query = { userId };
+  if (status) query.status = status;
 
-  if (status) {
-    query = query.eq("status", status);
-  }
+  const skip = (page - 1) * limit;
+  const [items, total] = await Promise.all([
+    Leave.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit),
+    Leave.countDocuments(query),
+  ]);
 
-  const { data: items, count, error } = await query
-    .order("createdat", { ascending: false })
-    .range((page - 1) * limit, page * limit - 1);
-
-  if (error) throw error;
-  return { items: items || [], total: count || 0, page, limit };
+  return { items: items.map((i) => i.toJSON()), total, page, limit };
 };
 
 export const listPending = async ({ page = 1, limit = 20, student, room }) => {
-  // Get all pending leaves first without relationships
-  let query = supabaseAdmin
-    .from("leave")
-    .select("*", { count: "exact" })
-    .eq("status", "PENDING");
+  const query = { status: "PENDING" };
 
-  const { data: items, count, error } = await query
-    .order("createdat", { ascending: false })
-    .range((page - 1) * limit, page * limit - 1);
+  const items = await Leave.find(query)
+    .populate("userId", "name roomNumber email")
+    .sort({ createdAt: -1 });
 
-  if (error) throw error;
-
-  // Get all users to match by name/room
-  const { data: users } = await supabaseAdmin.from("user").select("*");
-  const userMap = {};
-  (users || []).forEach((u) => {
-    userMap[u.id] = u;
+  let filtered = items.map((item) => {
+    const json = item.toJSON();
+    json.user = item.userId
+      ? {
+          name: item.userId.name,
+          roomnumber: item.userId.roomNumber,
+          roomNumber: item.userId.roomNumber,
+          email: item.userId.email,
+        }
+      : { name: "Unknown", roomnumber: null };
+    return json;
   });
 
-  // Filter in-memory by student name or room if needed
-  let filtered = (items || []).map((leave) => {
-    const user = userMap[leave.userid];
-    return {
-      ...leave,
-      user: user || { name: "Unknown", roomnumber: null }
-    };
-  });
-  
   if (student || room) {
     filtered = filtered.filter((leave) => {
-      if (student && !leave.user.name.toLowerCase().includes(student.toLowerCase()))
+      if (student && !leave.user.name.toLowerCase().includes(student.toLowerCase())) {
         return false;
-      if (room && leave.user.roomnumber !== Number(room)) return false;
+      }
+      if (room && String(leave.user.roomNumber || leave.user.roomnumber) !== String(room)) {
+        return false;
+      }
       return true;
     });
   }
 
-  return { items: filtered, total: count || 0, page, limit };
+  const total = filtered.length;
+  const paginated = filtered.slice((page - 1) * limit, page * limit);
+
+  return { items: paginated, total, page, limit };
 };
 
-export const approve = async ({ id }) => {
-  const { data: existing, error: fetchError } = await supabaseAdmin
-    .from("leave")
-    .select()
-    .eq("id", Number(id))
-    .single();
+export const approve = async ({ id, approverId }) => {
+  const updated = await Leave.findByIdAndUpdate(
+    id,
+    { status: "APPROVED", approverId },
+    { new: true }
+  );
 
-  if (fetchError || !existing) {
+  if (!updated) {
     const e = new Error("Leave not found");
     e.status = 404;
     throw e;
   }
 
-  const { data: updated, error } = await supabaseAdmin
-    .from("leave")
-    .update({ status: "APPROVED" })
-    .eq("id", Number(id))
-    .select("id,status,fromdate,todate,userid")
-    .single();
-
-  if (error) throw error;
-  return updated;
+  return updated.toJSON();
 };
 
-export const reject = async ({ id }) => {
-  const { data: existing, error: fetchError } = await supabaseAdmin
-    .from("leave")
-    .select()
-    .eq("id", Number(id))
-    .single();
+export const reject = async ({ id, approverId }) => {
+  const updated = await Leave.findByIdAndUpdate(
+    id,
+    { status: "REJECTED", approverId },
+    { new: true }
+  );
 
-  if (fetchError || !existing) {
+  if (!updated) {
     const e = new Error("Leave not found");
     e.status = 404;
     throw e;
   }
 
-  const { data: updated, error } = await supabaseAdmin
-    .from("leave")
-    .update({ status: "REJECTED" })
-    .eq("id", Number(id))
-    .select("id,status,fromdate,todate,userid")
-    .single();
-
-  if (error) throw error;
-  return updated;
+  return updated.toJSON();
 };
 
 export const getById = async ({ id }) => {
-  const { data: leave, error } = await supabaseAdmin
-    .from("leave")
-    .select("id,userId,fromDate,toDate,reason,status,createdAt,user(id,name,email,roomNumber)")
-    .eq("id", Number(id))
-    .single();
-
-  if (error) throw error;
-  return leave;
-};
-
-export const deleteLeave = async ({ id, userId }) => {
-  const { data: existing, error: fetchError } = await supabaseAdmin
-    .from("leave")
-    .select()
-    .eq("id", Number(id))
-    .single();
-
-  if (fetchError || !existing) {
+  const leave = await Leave.findById(id).populate("userId", "name roomNumber email");
+  if (!leave) {
     const e = new Error("Leave not found");
     e.status = 404;
     throw e;
   }
 
-  if (existing.userId !== userId) {
+  const json = leave.toJSON();
+  json.user = leave.userId
+    ? {
+        name: leave.userId.name,
+        roomnumber: leave.userId.roomNumber,
+        roomNumber: leave.userId.roomNumber,
+        email: leave.userId.email,
+      }
+    : { name: "Unknown", roomnumber: null };
+
+  return json;
+};
+
+export const deleteLeave = async ({ id, userId }) => {
+  const existing = await Leave.findById(id);
+  if (!existing) {
+    const e = new Error("Leave not found");
+    e.status = 404;
+    throw e;
+  }
+
+  if (String(existing.userId) !== String(userId)) {
     const e = new Error("Forbidden");
     e.status = 403;
     throw e;
   }
 
-  const { error } = await supabaseAdmin
-    .from("leave")
-    .delete()
-    .eq("id", Number(id));
-
-  if (error) throw error;
+  await Leave.findByIdAndDelete(id);
   return { success: true };
 };

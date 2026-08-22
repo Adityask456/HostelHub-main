@@ -1,102 +1,80 @@
-import { supabaseAdmin } from "../../config/db.js";
+import { User } from "../../models/User.js";
+import { Leave } from "../../models/Leave.js";
+import { Complaint } from "../../models/Complaint.js";
+import { Poll } from "../../models/Poll.js";
 import bcrypt from "bcrypt";
 
 export const listUsers = async ({ role, search, page = 1, limit = 20 }) => {
-  let query = supabaseAdmin.from("user").select("*", { count: "exact" });
+  const query = {};
 
   if (role) {
-    query = query.eq("role", role);
+    query.role = role;
   }
 
   if (search) {
-    query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`);
+    query.$or = [
+      { name: { $regex: search, $options: "i" } },
+      { email: { $regex: search, $options: "i" } },
+    ];
   }
 
-  const { data: items, count, error } = await query
-    .order("createdat", { ascending: false })
-    .range((page - 1) * limit, page * limit - 1);
+  const skip = (page - 1) * limit;
+  const [items, total] = await Promise.all([
+    User.find(query).select("-password").sort({ createdAt: -1 }).skip(skip).limit(limit),
+    User.countDocuments(query),
+  ]);
 
-  return { items: items || [], total: count || 0, page, limit };
+  return { items: items.map((u) => u.toJSON()), total, page, limit };
 };
 
 export const updateMe = async ({ userId, name, roomNumber, oldPassword, newPassword }) => {
-  const { data: user, error: fetchError } = await supabaseAdmin
-    .from("user")
-    .select()
-    .eq("id", Number(userId))
-    .single();
-
-  if (fetchError || !user) throw new Error("User not found");
-
-  const data = {};
-
-  if (name && name !== user.name) {
-    data.name = name;
+  const user = await User.findById(userId);
+  if (!user) {
+    const e = new Error("User not found");
+    e.status = 404;
+    throw e;
   }
 
-  if (roomNumber !== undefined && roomNumber !== null && roomNumber !== user.roomnumber) {
-    data.roomnumber = roomNumber ? Number(roomNumber) : null;
+  if (name && name !== user.name) {
+    user.name = name;
+  }
+
+  if (roomNumber !== undefined && roomNumber !== null) {
+    user.roomNumber = String(roomNumber);
   }
 
   if (newPassword) {
     if (!oldPassword) {
-      throw new Error("Old password is required");
+      const e = new Error("Old password is required");
+      e.status = 400;
+      throw e;
     }
     const match = await bcrypt.compare(oldPassword, user.password);
     if (!match) {
-      throw new Error("Old password is incorrect");
+      const e = new Error("Old password is incorrect");
+      e.status = 400;
+      throw e;
     }
-    const hashed = await bcrypt.hash(newPassword, 10);
-    data.password = hashed;
+    user.password = await bcrypt.hash(newPassword, 10);
   }
 
-  if (Object.keys(data).length === 0) {
-    return {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      roomNumber: user.roomnumber,
-      createdAt: user.createdat,
-    };
-  }
+  await user.save();
 
-  const { data: updated, error: updateError } = await supabaseAdmin
-    .from("user")
-    .update(data)
-    .eq("id", Number(userId))
-    .select("*")
-    .single();
-
-  if (updateError) throw updateError;
-  return {
-    id: updated.id,
-    name: updated.name,
-    email: updated.email,
-    role: updated.role,
-    roomNumber: updated.roomnumber,
-    createdAt: updated.createdat,
-  };
+  const userObj = user.toJSON();
+  delete userObj.password;
+  return userObj;
 };
 
 export const getStudentStats = async ({ userId }) => {
-  const [leavesData, complaintsData, pollsData] = await Promise.all([
-    supabaseAdmin
-      .from("leave")
-      .select("id", { count: "exact", head: true })
-      .eq("userid", Number(userId))
-      .eq("status", "PENDING"),
-    supabaseAdmin
-      .from("complaint")
-      .select("id", { count: "exact", head: true })
-      .eq("userid", Number(userId))
-      .neq("status", "RESOLVED"),
-    supabaseAdmin.from("poll").select("id", { count: "exact", head: true }),
+  const [pendingLeaves, activeComplaints, activePolls] = await Promise.all([
+    Leave.countDocuments({ userId, status: "PENDING" }),
+    Complaint.countDocuments({ userId, status: { $ne: "RESOLVED" } }),
+    Poll.countDocuments({}),
   ]);
 
   return {
-    pendingLeaves: leavesData.count || 0,
-    activeComplaints: complaintsData.count || 0,
-    activePolls: pollsData.count || 0,
+    pendingLeaves,
+    activeComplaints,
+    activePolls,
   };
 };

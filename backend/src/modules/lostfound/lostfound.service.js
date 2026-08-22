@@ -1,95 +1,89 @@
-import { supabaseAdmin } from "../../config/db.js";
+import { LostFound } from "../../models/LostFound.js";
 
 export const report = async ({ userId, type, title, description, location }) => {
-  const { data: report, error } = await supabaseAdmin
-    .from("lostfound")
-    .insert({
-      userid: Number(userId),
-      type,
-      title,
-      description,
-      location,
-      resolved: false,
-      createdat: new Date(),
-    })
-    .select("id,userid,type,title,description,location,resolved,createdat")
-    .single();
-
-  if (error) throw error;
-  return report;
+  const item = await LostFound.create({
+    userId,
+    type,
+    title,
+    description,
+    location,
+    resolved: false,
+  });
+  return item.toJSON();
 };
 
 export const list = async ({ type, resolved, page = 1, limit = 20 }) => {
-  let query = supabaseAdmin
-    .from("lostfound")
-    .select("*", { count: "exact" });
+  const query = {};
+  if (type) query.type = type;
+  if (resolved !== undefined) query.resolved = resolved;
 
-  if (type) {
-    query = query.eq("type", type);
-  }
-  if (resolved !== undefined) {
-    query = query.eq("resolved", resolved);
-  }
+  const skip = (page - 1) * limit;
+  const [items, total] = await Promise.all([
+    LostFound.find(query)
+      .populate("userId", "name roomNumber email")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    LostFound.countDocuments(query),
+  ]);
 
-  const { data: items, count, error } = await query
-    .order("createdat", { ascending: false })
-    .range((page - 1) * limit, page * limit - 1);
-
-  if (error) throw error;
-  
-  // Fetch user data for each item
-  const { data: users } = await supabaseAdmin.from("user").select("id,name,roomnumber,email");
-  const userMap = {};
-  (users || []).forEach((u) => {
-    userMap[u.id] = u;
+  const formatted = items.map((item) => {
+    const json = item.toJSON();
+    json.user = item.userId
+      ? {
+          name: item.userId.name,
+          roomnumber: item.userId.roomNumber,
+          roomNumber: item.userId.roomNumber,
+          email: item.userId.email,
+        }
+      : { name: "Unknown", roomnumber: null };
+    return json;
   });
-  
-  const itemsWithUser = (items || []).map((item) => ({
-    ...item,
-    user: userMap[item.userid] || { name: "Unknown", roomnumber: null }
-  }));
-  
-  return { items: itemsWithUser, total: count || 0, page, limit };
+
+  return { items: formatted, total, page, limit };
 };
 
 export const resolve = async ({ id }) => {
-  const { data: report, error } = await supabaseAdmin
-    .from("lostfound")
-    .update({ resolved: true })
-    .eq("id", Number(id))
-    .select("id,userid,type,title,description,location,resolved,createdat")
-    .single();
-
-  if (error) throw error;
-  return report;
+  const item = await LostFound.findByIdAndUpdate(
+    id,
+    { resolved: true },
+    { new: true }
+  );
+  if (!item) {
+    const e = new Error("Record not found");
+    e.status = 404;
+    throw e;
+  }
+  return item.toJSON();
 };
 
 export const getById = async ({ id }) => {
-  const { data: report, error } = await supabaseAdmin
-    .from("lostfound")
-    .select("*")
-    .eq("id", Number(id))
-    .single();
+  const item = await LostFound.findById(id).populate("userId", "name roomNumber email");
+  if (!item) {
+    const e = new Error("Record not found");
+    e.status = 404;
+    throw e;
+  }
 
-  if (error) throw error;
-  
-  // Fetch user data
-    const { data: user } = await supabaseAdmin.from("user").select("id,name,roomnumber,email").eq("id", report.userid).single();
-  
-  return {
-    ...report,
-    user: user || { name: "Unknown", roomnumber: null }
-  };
+  const json = item.toJSON();
+  json.user = item.userId
+    ? {
+        name: item.userId.name,
+        roomnumber: item.userId.roomNumber,
+        roomNumber: item.userId.roomNumber,
+        email: item.userId.email,
+      }
+    : { name: "Unknown", roomnumber: null };
+
+  return json;
 };
 
 export const remove = async ({ id }) => {
-  const { data: deleted, error } = await supabaseAdmin
-    .from("lostfound")
-    .delete()
-    .eq("id", Number(id))
-    .select("id")
-    .single();
-
-  if (error) throw error;
-  return deleted;
+  const deleted = await LostFound.findByIdAndDelete(id);
+  if (!deleted) {
+    const e = new Error("Record not found");
+    e.status = 404;
+    throw e;
+  }
+  return { id };
 };
