@@ -77,11 +77,13 @@ app.get("/api/admin/stats", auth, role("ADMIN"), async (req, res, next) => {
 
 app.use(errorHandler);
 
-// Connect to MongoDB and start server
-connectDB().then(() => {
-  app.listen(ENV.PORT, () => {
-    console.log(`🚀 HostelHub Server running on port ${ENV.PORT}`);
+// Connect to MongoDB and start server if not running in Vercel serverless environment
+if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+  connectDB().then(() => {
+    app.listen(ENV.PORT, () => {
+      console.log(`🚀 HostelHub Server running on port ${ENV.PORT}`);
+    });
   });
-});
+}
 
 export default app;
